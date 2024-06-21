@@ -1,0 +1,10 @@
+target: example.com
+sources:
+ - baidu
+ - bufferoverun
+ - crtsh
+ - hackertarget
+ - otx
+ - dnsdumpster
+ - rapiddns
+ - urlscan
