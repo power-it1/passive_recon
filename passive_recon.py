@@ -4,6 +4,7 @@ import yaml
 import json
 import argparse
 import os
+from tqdm import tqdm
 
 
 def load_config(config_file):
@@ -18,11 +19,66 @@ def load_config(config_file):
         print(f"Error parsing YAML config file: {e}")
         exit(1)
 
+def perform_whois(domain):
+    command = ['whois', domain]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Error running whois for domain: {domain}")
+        print(result.stderr)
+        return {}
+    return {"whois_data": result.stdout}
+
+def google_dork(domain):
+    command = ['oxdork', domain]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Error running oxdork for domain: {domain}")
+        print(result.stderr)
+        return []
+    return result.stdout.splitlines()
+
+def internetdb_query(ip):
+    command = ['curl', f'https://internetdb.shodan.io/{ip}']
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Error querying InternetDB for IP: {ip}")
+        print(result.stderr)
+        return {}
+    return json.loads(result.stdout)
+
+def run_dnsrecon(domain):
+    command = ['dnsrecon', '-d', domain]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Error running dnsrecon for domain: {domain}")
+        print(result.stderr)
+        return {}
+    return result.stdout
 
 def main():
+    print("""
+        \n
+
+        ┏┓  ┓  ┓       •    ┳┓       
+        ┗┓┓┏┣┓┏┫┏┓┏┳┓┏┓┓┏┓  ┣┫┏┓┏┏┓┏┓
+        ┗┛┗┻┗┛┗┻┗┛┛┗┗┗┻┗┛┗  ┛┗┗ ┗┗┛┛┗                            
+ +--^----------,--------,-----,--------^-,
+ | |||||||||   `--------'     |          O
+ `+---------------------------^----------|
+   `\_,---------,---------,--------------'
+     / XXXXXX /'|       /'
+    / XXXXXX /  `\    /'
+   / XXXXXX /`-------'
+  / XXXXXX /
+ / XXXXXX /
+(________(                
+ `------'             
+
+    """)
+
     parser = argparse.ArgumentParser(description="Run theHarvester tool on target domains.")
-    parser.add_argument('--target', type=str, help="Single target domain")
-    parser.add_argument('--target_file', type=str, help="JSON file with a list of target domains")
+    parser.add_argument('--target', '-t', type=str, help="Single target domain")
+    parser.add_argument('--target_file', '-f', type=str, help="JSON file with a list of target domains")
     args = parser.parse_args()
 
     if args.target:
@@ -54,33 +110,58 @@ def main():
 
         print(f'Working on target: {target}')
         subdomain_regex = rf'[\w\.\*-]+\.{re.escape(target)}'
-        for source in sources:
-            command = ['theHarvester', '-d', target, '-b', source]
-            result = subprocess.run(command, capture_output=True, text=True)
+        a_record_regex = re.compile(r'([a-zA-Z0-9.-]+):(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})')
 
-            if result.returncode != 0:
-                print(f"Error running theHarvester for source: {source}")
-                print(result.stderr)
-                continue
+        with tqdm(total=len(sources), desc='Sources') as pbar:
+            for source in sources:
+                command = ['theHarvester', '-d', target, '-b', source]
+                result = subprocess.run(command, capture_output=True, text=True)
 
-            found_subdomains = re.findall(subdomain_regex, result.stdout)
-            found_ipv4 = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', result.stdout)
-            found_ipv6 = re.findall(r'\b((([0-9A-Fa-f]{1,4}:){7}([0-9A-Fa-f]{1,4}|:))|(([0-9A-Fa-f]{1,4}:){1,7}:)|(([0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){1,5}(:[0-9A-Fa-f]{1,4}){1,2})|(([0-9A-Fa-f]{1,4}:){1,4}(:[0-9A-Fa-f]{1,4}){1,3})|(([0-9A-Fa-f]{1,4}:){1,3}(:[0-9A-Fa-f]{1,4}){1,4})|(([0-9A-Fa-f]{1,4}:){1,2}(:[0-9A-Fa-f]{1,4}){1,5})|([0-9A-Fa-f]{1,4}:((:[0-9A-Fa-f]{1,4}){1,6}))|(:((:[0-9A-Fa-f]{1,4}){1,7}|:))|(::([0-9A-Fa-f]{1,4}){0,7}(:[0-9A-Fa-f]{1,4}){0,1})|(::([0-9A-Fa-f]{1,4}){0,6}(:[0-9A-Fa-f]{1,4}){0,2})|(::([0-9A-Fa-f]{1,4}){0,5}(:[0-9A-Fa-f]{1,4}){0,3})|(::([0-9A-Fa-f]{1,4}){0,4}(:[0-9A-Fa-f]{1,4}){0,4})|(::([0-9A-Fa-f]{1,4}){0,3}(:[0-9A-Fa-f]{1,4}){0,5})|(::([0-9A-Fa-f]{1,4}){0,2}(:[0-9A-Fa-f]{1,4}){0,6})|(::[0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,7})|(::))\b', result.stdout)
-            found_asn = re.findall(r'AS\d{1,10}', result.stdout)
-            found_email = re.findall(r'(?!(?:^|[^@\w.])cmartorella@edge-security\.com\b)[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', result.stdout)
+                if result.returncode != 0:
+                    print(f"Error running theHarvester for source: {source}")
+                    print(result.stderr)
+                    continue
 
-            subdomains.update(found_subdomains)
-            ipv4.update(found_ipv4)
-            ipv6.update(found_ipv6)
-            asns.update(found_asn)
-            emails.update(found_email)
+                found_subdomains = re.findall(subdomain_regex, result.stdout)
+                found_ipv4 = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', result.stdout)
+                found_ipv6 = re.findall(r'\b((([0-9A-Fa-f]{1,4}:){7}([0-9A-Fa-f]{1,4}|:))|(([0-9A-Fa-f]{1,4}:){1,7}:)|(([0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){1,5}(:[0-9A-Fa-f]{1,4}){1,2})|(([0-9A-Fa-f]{1,4}:){1,4}(:[0-9A-Fa-f]{1,4}){1,3})|(([0-9A-Fa-f]{1,4}:){1,3}(:[0-9A-Fa-f]{1,4}){1,4})|(([0-9A-Fa-f]{1,4}:){1,2}(:[0-9A-Fa-f]{1,4}){1,5})|([0-9A-Fa-f]{1,4}:((:[0-9A-Fa-f]{1,4}){1,6}))|(:((:[0-9A-Fa-f]{1,4}){1,7}|:))|(::([0-9A-Fa-f]{1,4}){0,7}(:[0-9A-Fa-f]{1,4}){0,1})|(::([0-9A-Fa-f]{1,4}){0,6}(:[0-9A-Fa-f]{1,4}){0,2})|(::([0-9A-Fa-f]{1,4}){0,5}(:[0-9A-Fa-f]{1,4}){0,3})|(::([0-9A-Fa-f]{1,4}){0,4}(:[0-9A-Fa-f]{1,4}){0,4})|(::([0-9A-Fa-f]{1,4}){0,3}(:[0-9A-Fa-f]{1,4}){0,5})|(::([0-9A-Fa-f]{1,4}){0,2}(:[0-9A-Fa-f]{1,4}){0,6})|(::[0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,7})|(::))\b', result.stdout)
+                found_asn = re.findall(r'AS\d{1,10}', result.stdout)
+                found_email = re.findall(r'(?!(?:^|[^@\w.])cmartorella@edge-security\.com\b)[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', result.stdout)
+
+                subdomains.update(found_subdomains)
+                ipv4.update(found_ipv4)
+                ipv6.update(found_ipv6)
+                asns.update(found_asn)
+                emails.update(found_email)
+
+                for match in a_record_regex.findall(result.stdout):
+                    subdomains.add(match[0])
+                    ipv4.add(match[1])
+
+                pbar.update(1)
+
+        whois_info = perform_whois(target)
+
+        google_dork_results = google_dork(target)
+
+        internetdb_results = []
+        with tqdm(total=len(ipv4), desc='InternetDB Queries') as pbar:
+            for ip in ipv4:
+                internetdb_results.append(internetdb_query(ip))
+                pbar.update(1)
+
+        dnsrecon_output = run_dnsrecon(target)
 
         output_data = {
             "subdomains": list(subdomains),
             "ipv4_addresses": list(ipv4),
             "ipv6_addresses": list(ipv6),
             "asns": list(asns),
-            "emails": list(emails)
+            "emails": list(emails),
+            "whois_info": whois_info,
+            "google_dork_results": google_dork_results,
+            "internetdb_results": internetdb_results,
+            "dnsrecon_output": dnsrecon_output
         }
 
         # Create directory for the target
@@ -100,7 +181,6 @@ def main():
         print(f"\nASN for {target}: {total_asn}")
         total_email = len(emails)
         print(f"\nEmails for {target}: {total_email}")
-
 
 if __name__ == "__main__":
     main()
